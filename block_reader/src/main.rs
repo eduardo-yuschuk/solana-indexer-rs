@@ -93,6 +93,9 @@ fn parse_block(response: &Response<RpcBlockUpdate>) -> Option<()> {
                     let UiCompiledInstruction {
                         program_id_index, ..
                     } = ui_compiled_instruction;
+                    if *program_id_index as usize >= addresses.len() {
+                        println!("Program id index out of bounds: {}", *program_id_index);
+                    }
                     let invoked_program = addresses[*program_id_index as usize].clone();
                     invoked_program
                 }
