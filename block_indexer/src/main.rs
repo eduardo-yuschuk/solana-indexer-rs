@@ -66,17 +66,34 @@ fn main() {
     }
 }
 
+#[derive(Debug, Clone)]
 struct Event {}
 
 fn parse_block(data_obj: &serde_json::Value) -> Vec<Event> {
-    let events = Vec::new();
+    let mut events: Vec<Event> = Vec::new();
 
     let transactions = data_obj.get("transactions").unwrap();
 
     for transaction in transactions.as_array().unwrap() {
-        let transaction_obj = transaction.as_object().unwrap();
-        events.push(parse_transaction(&transaction_obj));
+        let transaction_obj: &serde_json::Map<String, serde_json::Value> = transaction.as_object().unwrap();
+        parse_transaction(transaction_obj)
+            .iter()
+            .for_each(|event| events.push(event.clone()));
     }
+
+    events
+}
+
+trait Parser {
+    fn parse_instruction(&self, data_obj: &serde_json::Value) -> Vec<Event>;
+    fn parse_transaction(&self, data_obj: &serde_json::Value) -> Vec<Event>;
+}
+
+fn parse_transaction(transaction_obj: &serde_json::Map<String, serde_json::Value>) -> Vec<Event> {
+    let events = Vec::new();
+
+    let transaction_obj = transaction_obj.get("transaction").unwrap();
+    events.push(parse_transaction(&transaction_obj));
 
     events
 }
