@@ -7,6 +7,12 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::time::Instant;
 
+mod moonshot;
+use moonshot::MoonshotParser;
+
+mod blockchain_data;
+// use blockchain_data::*;
+
 fn main() {
     let mut client = Client::connect(
         "postgres://postgres:postgres@localhost:5432/indexer",
@@ -50,9 +56,9 @@ fn main() {
 
             let save_begin = Instant::now();
 
-            let (rows_count, events_by_source_and_type) = save_events(&events);
+            let (_rows_count, events_by_source_and_type) = save_events(&events);
 
-            let report = build_events_report(&events_by_source_and_type);
+            let _report = build_events_report(&events_by_source_and_type);
 
             let save_time = save_begin.elapsed();
             println!("Save time: {:?}", save_time);
@@ -60,8 +66,8 @@ fn main() {
             let total_time = begin.elapsed();
             println!("Total time: {:?}", total_time);
 
-            let query = "UPDATE block_json SET indexed = TRUE WHERE slot = $1;";
-            client.execute(query, &[&slot]).unwrap();
+            //let query = "UPDATE block_json SET indexed = TRUE WHERE slot = $1;";
+            //client.execute(query, &[&slot]).unwrap();
         }
     }
 }
@@ -75,7 +81,8 @@ fn parse_block(data_obj: &serde_json::Value) -> Vec<Event> {
     let transactions = data_obj.get("transactions").unwrap();
 
     for transaction in transactions.as_array().unwrap() {
-        let transaction_obj: &serde_json::Map<String, serde_json::Value> = transaction.as_object().unwrap();
+        let transaction_obj: &serde_json::Map<String, serde_json::Value> =
+            transaction.as_object().unwrap();
         parse_transaction(transaction_obj)
             .iter()
             .for_each(|event| events.push(event.clone()));
@@ -84,28 +91,37 @@ fn parse_block(data_obj: &serde_json::Value) -> Vec<Event> {
     events
 }
 
-trait Parser {
-    fn parse_instruction(&self, data_obj: &serde_json::Value) -> Vec<Event>;
-    fn parse_transaction(&self, data_obj: &serde_json::Value) -> Vec<Event>;
-}
+// trait Parser {
+//     fn parse_instruction(&self, data_obj: &serde_json::Value) -> Vec<Event>;
+//     fn parse_transaction(&self, data_obj: &serde_json::Value) -> Vec<Event>;
+// }
 
 fn parse_transaction(transaction_obj: &serde_json::Map<String, serde_json::Value>) -> Vec<Event> {
-    let events = Vec::new();
+    let mut events = Vec::new();
+    let moonshot_parser = MoonshotParser::new();
 
-    let transaction_obj = transaction_obj.get("transaction").unwrap();
-    events.push(parse_transaction(&transaction_obj));
+    let transaction = transaction_obj.get("transaction").unwrap();
+    let instructions = transaction
+        .get("message")
+        .and_then(|msg| msg.get("instructions"))
+        .and_then(|instructions| instructions.as_array());
+
+    if let Some(instructions) = instructions {
+        for instruction in instructions {
+            let mut moonshot_events = moonshot_parser.parse_instruction(instruction);
+            events.append(&mut moonshot_events);
+        }
+    }
 
     events
 }
 
-fn save_events(events: &Vec<Event>) -> (i32, HashMap<String, Vec<Event>>) {
-    let mut events_by_source_and_type = HashMap::new();
-
+fn save_events(_events: &Vec<Event>) -> (i32, HashMap<String, Vec<Event>>) {
+    let events_by_source_and_type = HashMap::new();
     (0, events_by_source_and_type)
 }
 
-fn build_events_report(events_by_source_and_type: &HashMap<String, Vec<Event>>) -> String {
-    let mut report = String::new();
-
+fn build_events_report(_events_by_source_and_type: &HashMap<String, Vec<Event>>) -> String {
+    let report = String::new();
     report
 }
