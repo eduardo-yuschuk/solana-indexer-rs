@@ -1,40 +1,245 @@
-use crate::Event;
+use std::collections::HashMap;
+
+use crate::{
+    Event, FunctionCallEvent, FunctionCallEventMeta, FunctionCallInstructionData, GenericEventType,
+    IndexerEventSource,
+};
+use num_bigint::BigUint;
 use serde_json::Value;
 use solana_sdk::bs58;
-use num_bigint::BigUint;
 pub struct MoonshotParser;
+
+pub struct MoonshotTradeFunctionCallEventMeta {
+    pub block_time: u64,
+    pub sender: String,
+    pub mint: String,
+    pub failed_transaction: bool,
+    pub bonding_curve_token_post_balance: BigUint,
+    pub bonding_curve_sol_post_balance: BigUint,
+}
+
+impl FunctionCallEventMeta for MoonshotTradeFunctionCallEventMeta {}
+
+pub struct MoonshotTokenMintFunctionCallEventMeta {
+    pub block_time: u64,
+    pub sender: String,
+    pub mint: String,
+    pub failed_transaction: bool,
+}
+
+impl FunctionCallEventMeta for MoonshotTokenMintFunctionCallEventMeta {}
 
 impl MoonshotParser {
     pub fn new() -> Self {
         MoonshotParser
     }
 
-    pub fn parse_instruction(&self, instruction: &Value) -> Vec<Event> {
-        let _events = Vec::new();
+    pub fn parse_instruction(
+        &self,
+        transaction_obj: &serde_json::Map<String, serde_json::Value>,
+        instruction: &Value,
+        addresses: &Vec<String>,
+        block_time: u64,
+    ) -> Vec<Event> {
+        let mut events: Vec<Event> = Vec::new();
 
         // Aquí iría la lógica para parsear instrucciones específicas de Moonshot
         // Por ahora retornamos un vector vacío
-
+        println!("instruction: {:?}", instruction);
         let instruction_data = instruction.get("data").unwrap();
+        println!("instruction_data: {:?}", instruction_data);
         let instruction_data_str = instruction_data.as_str().unwrap();
         let instruction_data_bytes = bs58::decode(instruction_data_str).into_vec().unwrap();
+
+        let program_id_index = instruction.get("programIdIndex").unwrap().as_u64().unwrap();
+        let program_id = addresses.get(program_id_index as usize).unwrap();
+
+        println!("program_id: {}", program_id);
+
+        if (program_id != "MoonCVVNZFSYkqNXP6bxHLPL6QQJiMagDL3qcqUQTrG") {
+            return events;
+        }
 
         let decoded_instruction = decode_instruction_data(&instruction_data_bytes);
 
         match decoded_instruction {
             MoonshotInstructionData::Trade(_trade) => {
-                // TODO: Implement buy event
+                let curve_account_index = get_address_index(2, instruction);
+                let curve_token_account_index = get_address_index(3, instruction);
+
+                let meta = transaction_obj.get("meta").unwrap().as_object().unwrap();
+
+                let curve_token_account_token_balances =
+                    get_token_balances(meta, curve_token_account_index);
+
+                let pb = curve_token_account_token_balances.post_balances[0]
+                    .as_object()
+                    .unwrap();
+                let uita = pb.get("uiTokenAmount").unwrap().as_object().unwrap();
+                let amount = uita.get("amount").unwrap().as_str().unwrap();
+                let curve_token_account_token_post_balance =
+                    BigUint::from(amount.parse::<u64>().unwrap());
+
+                println!(
+                    "curve_token_account_token_post_balance: {}",
+                    curve_token_account_token_post_balance
+                );
+
+                let curve_account_sol_balances = get_sol_balances(meta, curve_account_index);
+
+                let amount = curve_account_sol_balances.post_balances[0]
+                    .as_u64()
+                    .unwrap();
+                let curve_account_sol_post_balance = BigUint::from(amount);
+
+                let transaction = transaction_obj.get("transaction").unwrap();
+
+                let signatures = transaction.get("signatures").unwrap().as_array().unwrap();
+                let signature = signatures.get(0).unwrap().as_str().unwrap();
+
+                let failed_transaction = !meta.get("err").unwrap().is_null();
+
+                let function_call_event = Event::FunctionCall(FunctionCallEvent {
+                    source: IndexerEventSource::Moonshot,
+                    event_type: GenericEventType::Trade,
+                    slot: block_time,
+                    signature: signature.to_string(),
+                    event_obj: Box::new(decoded_instruction.clone()),
+                    event_meta: Box::new(MoonshotTradeFunctionCallEventMeta {
+                        block_time,
+                        sender: get_address_as_string(0, addresses, instruction),
+                        // senderTokenAccount
+                        // curveAccount
+                        // curveTokenAccount
+                        // dexFee
+                        // helioFee
+                        mint: get_address_as_string(6, addresses, instruction),
+                        // configAccount
+                        // tokenProgram
+                        // associatedTokenProgram
+                        // systemProgram
+                        failed_transaction,
+                        // post-balances
+                        bonding_curve_token_post_balance: curve_token_account_token_post_balance,
+                        bonding_curve_sol_post_balance: curve_account_sol_post_balance,
+                    }),
+                });
+                events.push(function_call_event);
             }
             MoonshotInstructionData::TokenMint(_token_mint) => {
-                // TODO: Implement sell event
+                let meta = transaction_obj.get("meta").unwrap().as_object().unwrap();
+                let failed_transaction = !meta.get("err").unwrap().is_null();
+                if failed_transaction {
+                    return events;
+                }
+
+                let transaction = transaction_obj.get("transaction").unwrap();
+                let signatures = transaction.get("signatures").unwrap().as_array().unwrap();
+                let signature = signatures.get(0).unwrap().as_str().unwrap();
+
+                let function_call_event = Event::FunctionCall(FunctionCallEvent {
+                    source: IndexerEventSource::Moonshot,
+                    event_type: GenericEventType::TokenMint,
+                    slot: block_time,
+                    signature: signature.to_string(),
+                    event_obj: Box::new(decoded_instruction.clone()),
+                    event_meta: Box::new(MoonshotTokenMintFunctionCallEventMeta {
+                        block_time,
+                        sender: get_address_as_string(0, addresses, instruction),
+                        mint: get_address_as_string(6, addresses, instruction),
+                        failed_transaction,
+                    }),
+                });
+                events.push(function_call_event);
             }
             MoonshotInstructionData::Unknown => {
                 // TODO: Implement unknown event
             }
         }
 
-        _events
+        events
     }
+}
+
+fn get_address_index(index: u64, instruction: &Value) -> u64 {
+    match instruction.get("accounts") {
+        Some(accounts) => {
+            let accounts_as_array = accounts.as_array().unwrap();
+            let account = accounts_as_array.get(index as usize).unwrap();
+            let account_index = account.as_u64().unwrap();
+            //let account_index = account_str.parse::<u64>().unwrap();
+            account_index
+        }
+        None => instruction
+            .get("accountKeyIndexes")
+            .unwrap()
+            .get(index as usize)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap(),
+    }
+}
+
+struct TokenBalances {
+    pre_balances: Vec<serde_json::Value>,
+    post_balances: Vec<serde_json::Value>,
+}
+
+fn get_token_balances(
+    meta: &serde_json::Map<String, serde_json::Value>,
+    account_id: u64,
+) -> TokenBalances {
+    let pre_balances: Vec<serde_json::Value> = meta
+        .get("preTokenBalances")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|balance| balance.get("accountIndex").unwrap().as_u64().unwrap() == account_id)
+        .map(|balance| balance.clone())
+        .collect();
+    let post_balances: Vec<Value> = meta
+        .get("postTokenBalances")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|balance| balance.get("accountIndex").unwrap().as_u64().unwrap() == account_id)
+        .map(|balance| balance.clone())
+        .collect();
+    TokenBalances {
+        pre_balances,
+        post_balances,
+    }
+}
+
+fn get_sol_balances(
+    meta: &serde_json::Map<String, serde_json::Value>,
+    account_id: u64,
+) -> TokenBalances {
+    let pre_balance = meta
+        .get("preBalances")
+        .unwrap()
+        .get(account_id as usize)
+        .unwrap();
+    println!("pre_balance: {}", pre_balance);
+    let post_balance = meta
+        .get("postBalances")
+        .unwrap()
+        .get(account_id as usize)
+        .unwrap();
+    println!("post_balance: {}", post_balance);
+    TokenBalances {
+        pre_balances: vec![pre_balance.clone()],
+        post_balances: vec![post_balance.clone()],
+    }
+}
+
+fn get_address_as_string(index: u64, addresses: &Vec<String>, instruction: &Value) -> String {
+    let address_index = get_address_index(index, instruction);
+    addresses.get(address_index as usize).unwrap().to_string()
 }
 
 enum MoonshotInstructionDiscriminator {
@@ -45,29 +250,17 @@ enum MoonshotInstructionDiscriminator {
 }
 
 impl MoonshotInstructionDiscriminator {
-    fn from_u64(value: u64) -> Self {
-        match value {
-            16927863322537952870 => MoonshotInstructionDiscriminator::Buy,
-            12502976635542562355 => MoonshotInstructionDiscriminator::Sell,
-            12967285527113116675 => MoonshotInstructionDiscriminator::TokenMint,
+    fn from_big_uint(value: BigUint) -> Self {
+        match value.to_string().as_str() {
+            "16927863322537952870" => MoonshotInstructionDiscriminator::Buy,
+            "12502976635542562355" => MoonshotInstructionDiscriminator::Sell,
+            "12967285527113116675" => MoonshotInstructionDiscriminator::TokenMint,
             _ => MoonshotInstructionDiscriminator::Unknown,
         }
     }
 }
 
-enum MoonshotInstructionData {
-    Trade(MoonshotTradeValues),
-    TokenMint(MoonshotTokenMintValues),
-    Unknown,
-}
-
-pub struct MoonshotTradeValues {
-    pub token_amount: u64,
-    pub collateral_amount: u64,
-    pub fixed_side: u8,
-    pub slippage_bps: u64,
-}
-
+#[derive(Debug, Clone)]
 pub struct MoonshotTokenMintValues {
     pub name: String,
     pub symbol: String,
@@ -79,42 +272,47 @@ pub struct MoonshotTokenMintValues {
     pub migration_target: u8,
 }
 
-fn u64_bytes_to_big_int(bytes: &[u8], offset: usize) -> BigUint {
-    let mut value = BigUint::ZERO;
-    value = value | BigUint::from(bytes[offset + 7]) << 56;
-    value = value | BigUint::from(bytes[offset + 6]) << 48;
-    value = value | BigUint::from(bytes[offset + 5]) << 40;
-    value = value | BigUint::from(bytes[offset + 4]) << 32;
-    value = value | BigUint::from(bytes[offset + 3]) << 24;
-    value = value | BigUint::from(bytes[offset + 2]) << 16;
-    value = value | BigUint::from(bytes[offset + 1]) << 8;
-    value = value | BigUint::from(bytes[offset + 0]);
-    value
+#[derive(Debug, Clone)]
+enum MoonshotInstructionData {
+    Trade(MoonshotTradeValues),
+    TokenMint(MoonshotTokenMintValues),
+    Unknown,
+}
+
+impl FunctionCallInstructionData for MoonshotInstructionData {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MoonshotTradeValues {
+    pub token_amount: u64,
+    pub collateral_amount: u64,
+    pub fixed_side: u8,
+    pub slippage_bps: u64,
 }
 
 fn decode_instruction_data(instruction_data: &[u8]) -> MoonshotInstructionData {
     // el primer u64 es el discriminador
-    let instruction_type = u64_bytes_to_big_int(instruction_data, 0);
+    //let instruction_type = u64_bytes_to_big_int(instruction_data, 0);
 
-    println!("instruction_type: {}", instruction_type);
+    let instruction_type = BigUint::from_bytes_le(&instruction_data[0..8]);
 
-    // match MoonshotInstructionDiscriminator::from_u64(instruction_type) {
-    //     MoonshotInstructionDiscriminator::Buy => {
-    //         let decoded_trade = decode_trade(instruction_data);
-    //         MoonshotInstructionData::Trade(decoded_trade)
-    //     }
-    //     MoonshotInstructionDiscriminator::Sell => {
-    //         let decoded_trade = decode_trade(instruction_data);
-    //         MoonshotInstructionData::Trade(decoded_trade)
-    //     }
-    //     MoonshotInstructionDiscriminator::TokenMint => {
-    //         let decoded_token_mint = decode_token_mint(instruction_data);
-    //         MoonshotInstructionData::TokenMint(decoded_token_mint)
-    //     }
-    //     MoonshotInstructionDiscriminator::Unknown => todo!(),
-    // }
+    let instruction_type_string = instruction_type.to_string();
+    println!("instruction_type_string: {}", instruction_type_string);
 
-    MoonshotInstructionData::Unknown
+    match MoonshotInstructionDiscriminator::from_big_uint(instruction_type) {
+        MoonshotInstructionDiscriminator::Buy => {
+            let decoded_trade = decode_trade(instruction_data);
+            MoonshotInstructionData::Trade(decoded_trade)
+        }
+        MoonshotInstructionDiscriminator::Sell => {
+            let decoded_trade = decode_trade(instruction_data);
+            MoonshotInstructionData::Trade(decoded_trade)
+        }
+        MoonshotInstructionDiscriminator::TokenMint => {
+            let decoded_token_mint = decode_token_mint(instruction_data);
+            MoonshotInstructionData::TokenMint(decoded_token_mint)
+        }
+        MoonshotInstructionDiscriminator::Unknown => todo!(),
+    }
 }
 
 fn decode_trade(instruction_data: &[u8]) -> MoonshotTradeValues {
@@ -132,14 +330,27 @@ fn decode_trade(instruction_data: &[u8]) -> MoonshotTradeValues {
 }
 
 fn decode_token_mint(instruction_data: &[u8]) -> MoonshotTokenMintValues {
-    let name = String::from_utf8(instruction_data[8..].to_vec()).unwrap();
-    let symbol = String::from_utf8(instruction_data[16..].to_vec()).unwrap();
-    let uri = String::from_utf8(instruction_data[24..].to_vec()).unwrap();
-    let decimals = u8::from_le_bytes(instruction_data[32..33].try_into().unwrap());
-    let collateral_currency = u8::from_le_bytes(instruction_data[33..34].try_into().unwrap());
-    let amount = u64::from_le_bytes(instruction_data[34..42].try_into().unwrap());
-    let curve_type = u8::from_le_bytes(instruction_data[42..43].try_into().unwrap());
-    let migration_target = u8::from_le_bytes(instruction_data[43..44].try_into().unwrap());
+    let mut instruction_data_mut = instruction_data;
+    let _discriminator: u64 =
+        borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+    let name = borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+    let symbol = borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+    let uri = borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+    let decimals = borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+    let collateral_currency =
+        borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+    let amount = borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+    let curve_type = borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+    let migration_target = borsh::BorshDeserialize::deserialize(&mut instruction_data_mut).unwrap();
+
+    // let name = String::from_utf8(instruction_data[8..].to_vec()).unwrap();
+    // let symbol = String::from_utf8(instruction_data[16..].to_vec()).unwrap();
+    // let uri = String::from_utf8(instruction_data[24..].to_vec()).unwrap();
+    // let decimals = u8::from_le_bytes(instruction_data[32..33].try_into().unwrap());
+    // let collateral_currency = u8::from_le_bytes(instruction_data[33..34].try_into().unwrap());
+    // let amount = u64::from_le_bytes(instruction_data[34..42].try_into().unwrap());
+    // let curve_type = u8::from_le_bytes(instruction_data[42..43].try_into().unwrap());
+    // let migration_target = u8::from_le_bytes(instruction_data[43..44].try_into().unwrap());
 
     MoonshotTokenMintValues {
         name,

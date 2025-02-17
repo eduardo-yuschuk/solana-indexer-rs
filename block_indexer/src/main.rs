@@ -4,10 +4,12 @@
 #![allow(unused)]
 
 use flate2::read::GzDecoder;
+use num_bigint::BigUint;
 use postgres::Client;
 use serde_json;
 use std::collections::HashMap;
-use std::io::Read;
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::time::Instant;
 
 mod moonshot;
@@ -17,6 +19,14 @@ mod blockchain_data;
 // use blockchain_data::*;
 
 fn main() {
+    // // read tx.json
+    // let file = File::open("data/moon_tx.json").unwrap();
+    // let reader = BufReader::new(file);
+    // let data_obj = serde_json::from_reader(reader).unwrap();
+
+    // let events = parse_transaction(1, 1739711240, &data_obj);
+    // // println!("events: {:?}", events);
+    //////////////////////////////////////////////////////////////////////////////////////////////////////
     let mut client = Client::connect(
         "postgres://postgres:postgres@localhost:5432/indexer",
         postgres::NoTls,
@@ -75,14 +85,37 @@ fn main() {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Event {}
+pub enum Event {
+    FunctionCall(FunctionCallEvent),
+}
+
+pub struct FunctionCallEvent {
+    pub source: IndexerEventSource,
+    pub event_type: GenericEventType,
+    pub slot: u64,
+    pub signature: String,
+    pub event_obj: Box<dyn FunctionCallInstructionData>,
+    pub event_meta: Box<dyn FunctionCallEventMeta>,
+}
+
+pub enum IndexerEventSource {
+    Moonshot,
+}
+
+pub enum GenericEventType {
+    Trade,
+    TokenMint,
+}
+
+pub trait FunctionCallInstructionData {}
+
+pub trait FunctionCallEventMeta {}
 
 fn parse_block(slot: i32, data_obj: &serde_json::Value) -> Vec<Event> {
     let mut events: Vec<Event> = Vec::new();
 
     let block_height = data_obj.get("blockHeight").unwrap().as_i64().unwrap();
-    let block_time = data_obj.get("blockTime").unwrap().as_i64().unwrap();
+    let block_time = data_obj.get("blockTime").unwrap().as_u64().unwrap();
     let block_hash = data_obj.get("blockhash").unwrap().as_str().unwrap();
     let parent_slot = data_obj.get("parentSlot").unwrap().as_i64().unwrap() as i32;
     let previous_block_hash = data_obj.get("previousBlockhash").unwrap().as_str().unwrap();
@@ -112,10 +145,10 @@ fn parse_block(slot: i32, data_obj: &serde_json::Value) -> Vec<Event> {
 
         let transaction: &serde_json::Map<String, serde_json::Value> =
             transaction_obj.as_object().unwrap();
-        
-        parse_transaction(slot, block_time, transaction)
-            .iter()
-            .for_each(|event| events.push(event.clone()));
+
+        parse_transaction(slot, block_time, transaction);
+        // .iter()
+        // .for_each(|event| events.push(event.clone()));
     }
 
     events
@@ -128,13 +161,26 @@ fn parse_block(slot: i32, data_obj: &serde_json::Value) -> Vec<Event> {
 
 fn parse_transaction(
     slot: i32,
-    block_time: i64,
+    block_time: u64,
     transaction_obj: &serde_json::Map<String, serde_json::Value>,
 ) -> Vec<Event> {
     let mut events = Vec::new();
     let moonshot_parser = MoonshotParser::new();
 
     let transaction = transaction_obj.get("transaction").unwrap();
+    let meta = transaction_obj.get("meta").unwrap();
+    let message = transaction.get("message").unwrap();
+    let account_keys = message.get("accountKeys");
+    let static_account_keys = message.get("staticAccountKeys");
+    let loaded_addresses = meta.get("loadedAddresses").unwrap();
+
+    let addresses = get_addresses_vector(account_keys, static_account_keys, loaded_addresses);
+
+    // let addresses_map = addresses
+    //     .iter()
+    //     .map(|v| (v.parse::<u64>().unwrap(), v.clone()))
+    //     .collect();
+
     let instructions = transaction
         .get("message")
         .and_then(|msg| msg.get("instructions"))
@@ -142,12 +188,79 @@ fn parse_transaction(
 
     if let Some(instructions) = instructions {
         for instruction in instructions {
-            let mut moonshot_events = moonshot_parser.parse_instruction(instruction);
+            let mut moonshot_events = moonshot_parser.parse_instruction(
+                transaction_obj,
+                instruction,
+                &addresses,
+                block_time,
+            );
             events.append(&mut moonshot_events);
         }
     }
 
     events
+}
+
+fn get_addresses_vector(
+    account_keys: Option<&serde_json::Value>,
+    static_account_keys: Option<&serde_json::Value>,
+    loaded_addresses: &serde_json::Value,
+) -> Vec<String> {
+    let mut addresses: Vec<String>;
+    if (account_keys.is_some()) {
+        addresses = account_keys
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        addresses.extend(
+            loaded_addresses
+                .get("writable")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string()),
+        );
+        addresses.extend(
+            loaded_addresses
+                .get("readonly")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string()),
+        );
+    } else {
+        addresses = static_account_keys
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        addresses.extend(
+            loaded_addresses
+                .get("writable")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string()),
+        );
+        addresses.extend(
+            loaded_addresses
+                .get("readonly")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string()),
+        );
+    }
+    addresses
 }
 
 fn save_events(_events: &Vec<Event>) -> (i32, HashMap<String, Vec<Event>>) {
@@ -165,15 +278,15 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::BufReader;
-    
+
     #[test]
     fn test_parse_transaction() {
         // read tx.json
         let file = File::open("data/moon_tx.json").unwrap();
         let reader = BufReader::new(file);
-        let data_obj: serde_json::Value = serde_json::from_reader(reader).unwrap();
+        let data_obj = serde_json::from_reader(reader).unwrap();
 
         let events = parse_transaction(1, 1739711240, &data_obj);
-        println!("events: {:?}", events);
-    }    
+        // println!("events: {:?}", events);
+    }
 }

@@ -19,3 +19,4 @@ url = { version = "2.5.4", features = ["serde"] }
 solana-transaction-status-client-types = "2.1.7"
 dotenv = "0.15.0"
 num-bigint = "0.4.1"
+borsh = "1.5.5"
