@@ -1,4 +1,6 @@
+use sha256::digest;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::{
     Event, FunctionCallEvent, FunctionCallEventMeta, FunctionCallInstructionData, GenericEventType,
@@ -152,6 +154,12 @@ impl MoonshotParser {
                 });
                 events.push(function_call_event);
             }
+            MoonshotInstructionData::MigrateFunds(_migrate_funds) => {
+            }
+            MoonshotInstructionData::ConfigInit(_config_init) => {
+            }
+            MoonshotInstructionData::ConfigUpdate(_config_update) => {
+            }
             MoonshotInstructionData::Unknown => {
                 // TODO: Implement unknown event
             }
@@ -246,16 +254,44 @@ enum MoonshotInstructionDiscriminator {
     Buy,
     Sell,
     TokenMint,
+    MigrateFunds,
+    ConfigInit,
+    ConfigUpdate,
     Unknown,
 }
 
+static MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
+    LazyLock::new(|| digest(b"global:buy"));
+static MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
+    LazyLock::new(|| digest(b"global:sell"));
+static MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
+    LazyLock::new(|| digest(b"global:token_mint"));
+static MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
+    LazyLock::new(|| digest(b"global:migrate_funds"));
+static MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
+    LazyLock::new(|| digest(b"global:config_init"));
+static MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
+    LazyLock::new(|| digest(b"global:config_update"));
+
 impl MoonshotInstructionDiscriminator {
     fn from_big_uint(value: BigUint) -> Self {
-        match value.to_string().as_str() {
-            "16927863322537952870" => MoonshotInstructionDiscriminator::Buy,
-            "12502976635542562355" => MoonshotInstructionDiscriminator::Sell,
-            "12967285527113116675" => MoonshotInstructionDiscriminator::TokenMint,
-            _ => MoonshotInstructionDiscriminator::Unknown,
+        let value_str = value.to_string();
+        let value_str = value_str.as_str();
+
+        if value_str == MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR.as_str() {
+            MoonshotInstructionDiscriminator::Buy
+        } else if value_str == MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR.as_str() {
+            MoonshotInstructionDiscriminator::Sell
+        } else if value_str == MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR.as_str() {
+            MoonshotInstructionDiscriminator::TokenMint
+        } else if value_str == MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR.as_str() {
+            MoonshotInstructionDiscriminator::MigrateFunds
+        } else if value_str == MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR.as_str() {
+            MoonshotInstructionDiscriminator::ConfigInit
+        } else if value_str == MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR.as_str() {
+            MoonshotInstructionDiscriminator::ConfigUpdate
+        } else {
+            MoonshotInstructionDiscriminator::Unknown
         }
     }
 }
@@ -273,9 +309,21 @@ pub struct MoonshotTokenMintValues {
 }
 
 #[derive(Debug, Clone)]
+pub struct MoonshotMigrateFundsValues {}
+
+#[derive(Debug, Clone)]
+pub struct MoonshotConfigInitValues {}
+
+#[derive(Debug, Clone)]
+pub struct MoonshotConfigUpdateValues {}
+
+#[derive(Debug, Clone)]
 enum MoonshotInstructionData {
     Trade(MoonshotTradeValues),
     TokenMint(MoonshotTokenMintValues),
+    MigrateFunds(MoonshotMigrateFundsValues),
+    ConfigInit(MoonshotConfigInitValues),
+    ConfigUpdate(MoonshotConfigUpdateValues),
     Unknown,
 }
 
@@ -310,6 +358,18 @@ fn decode_instruction_data(instruction_data: &[u8]) -> MoonshotInstructionData {
         MoonshotInstructionDiscriminator::TokenMint => {
             let decoded_token_mint = decode_token_mint(instruction_data);
             MoonshotInstructionData::TokenMint(decoded_token_mint)
+        }
+        MoonshotInstructionDiscriminator::MigrateFunds => {
+            let decoded_migrate_funds = decode_migrate_funds(instruction_data);
+            MoonshotInstructionData::MigrateFunds(decoded_migrate_funds)
+        }
+        MoonshotInstructionDiscriminator::ConfigInit => {
+            let decoded_config_init = decode_config_init(instruction_data);
+            MoonshotInstructionData::ConfigInit(decoded_config_init)
+        }
+        MoonshotInstructionDiscriminator::ConfigUpdate => {
+            let decoded_config_update = decode_config_update(instruction_data);
+            MoonshotInstructionData::ConfigUpdate(decoded_config_update)
         }
         MoonshotInstructionDiscriminator::Unknown => todo!(),
     }
@@ -362,6 +422,18 @@ fn decode_token_mint(instruction_data: &[u8]) -> MoonshotTokenMintValues {
         curve_type,
         migration_target,
     }
+}
+
+fn decode_migrate_funds(instruction_data: &[u8]) -> MoonshotMigrateFundsValues {
+    MoonshotMigrateFundsValues {}
+}
+
+fn decode_config_init(instruction_data: &[u8]) -> MoonshotConfigInitValues {
+    MoonshotConfigInitValues {}
+}
+
+fn decode_config_update(instruction_data: &[u8]) -> MoonshotConfigUpdateValues {
+    MoonshotConfigUpdateValues {}
 }
 
 #[cfg(test)]
