@@ -63,6 +63,7 @@ impl MoonshotParser {
         }
 
         let decoded_instruction = decode_instruction_data(&instruction_data_bytes);
+        let decoded_instruction_clone = decoded_instruction.clone();
 
         match decoded_instruction {
             MoonshotInstructionData::Trade(_trade) => {
@@ -144,7 +145,7 @@ impl MoonshotParser {
                     event_type: GenericEventType::TokenMint,
                     slot: block_time,
                     signature: signature.to_string(),
-                    event_obj: Box::new(decoded_instruction.clone()),
+                    event_obj: Box::new(decoded_instruction_clone),
                     event_meta: Box::new(MoonshotTokenMintFunctionCallEventMeta {
                         block_time,
                         sender: get_address_as_string(0, addresses, instruction),
@@ -260,39 +261,106 @@ enum MoonshotInstructionDiscriminator {
     Unknown,
 }
 
-static MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
-    LazyLock::new(|| digest(b"global:buy"));
-static MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
-    LazyLock::new(|| digest(b"global:sell"));
-static MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
-    LazyLock::new(|| digest(b"global:token_mint"));
-static MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
-    LazyLock::new(|| digest(b"global:migrate_funds"));
-static MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
-    LazyLock::new(|| digest(b"global:config_init"));
-static MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR: LazyLock<String> =
-    LazyLock::new(|| digest(b"global:config_update"));
+static MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
+    LazyLock::new(|| {
+        let digest_result = digest(b"global:buy");
+        // digest_result is a number in text format, convert to a big uint
+        let digest_big_uint = BigUint::from_str(&digest_result).unwrap();
+        println!("digest_big_uint: {}", digest_big_uint);
+        let digest_bytes = digest_big_uint.to_bytes_le();
+        println!("digest_bytes: {:?}", digest_bytes);
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&digest_bytes[0..8]);
+        bytes
+    });
+static MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
+    LazyLock::new(|| {
+        let digest_result = digest(b"global:sell");
+        println!("digest_result: {}", digest_result);
+        let digest_bytes = digest_result.as_bytes();
+        println!("digest_bytes: {:?}", digest_bytes);
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&digest_bytes[0..8]);
+        bytes
+    });
+static MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
+    LazyLock::new(|| {
+        let digest_result = digest(b"global:token_mint");
+        println!("digest_result: {}", digest_result);
+        let digest_bytes = digest_result.as_bytes();
+        println!("digest_bytes: {:?}", digest_bytes);
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&digest_bytes[0..8]);
+        bytes
+    });
+static MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
+    LazyLock::new(|| {
+        let digest_result = digest(b"global:migrate_funds");
+        println!("digest_result: {}", digest_result);
+        let digest_bytes = digest_result.as_bytes();
+        println!("digest_bytes: {:?}", digest_bytes);
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&digest_bytes[0..8]);
+        bytes
+    });
+static MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
+    LazyLock::new(|| {
+        let digest_result = digest(b"global:config_init");
+        println!("digest_result: {}", digest_result);
+        let digest_bytes = digest_result.as_bytes();
+        println!("digest_bytes: {:?}", digest_bytes);
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&digest_bytes[0..8]);
+        bytes
+    });
+static MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
+    LazyLock::new(|| {
+        let digest_result = digest(b"global:config_update");
+        println!("digest_result: {}", digest_result);
+        let digest_bytes = digest_result.as_bytes();
+        println!("digest_bytes: {:?}", digest_bytes);
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&digest_bytes[0..8]);
+        bytes
+    });
 
 impl MoonshotInstructionDiscriminator {
     fn from_big_uint(value: BigUint) -> Self {
         let value_str = value.to_string();
         let value_str = value_str.as_str();
 
-        if value_str == MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR.as_str() {
-            MoonshotInstructionDiscriminator::Buy
-        } else if value_str == MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR.as_str() {
-            MoonshotInstructionDiscriminator::Sell
-        } else if value_str == MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR.as_str() {
-            MoonshotInstructionDiscriminator::TokenMint
-        } else if value_str == MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR.as_str() {
-            MoonshotInstructionDiscriminator::MigrateFunds
-        } else if value_str == MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR.as_str() {
-            MoonshotInstructionDiscriminator::ConfigInit
-        } else if value_str == MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR.as_str() {
-            MoonshotInstructionDiscriminator::ConfigUpdate
-        } else {
-            MoonshotInstructionDiscriminator::Unknown
-        }
+        // let buy_discriminator = MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR.as_str();
+        // let sell_discriminator = MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR.as_str();
+        // let token_mint_discriminator = MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR.as_str();
+        // let migrate_funds_discriminator = MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR.as_str();
+        // let config_init_discriminator = MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR.as_str();
+        // let config_update_discriminator = MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR.as_str();
+
+        println!("value_str: {}", value_str);
+        println!("buy_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR));
+        println!("sell_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR));
+        println!("token_mint_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR));
+        println!("migrate_funds_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR));
+        println!("config_init_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR));
+        println!("config_update_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR));
+
+        // if value_str == MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR.as_str() {
+        //     MoonshotInstructionDiscriminator::Buy
+        // } else if value_str == MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR.as_str() {
+        //     MoonshotInstructionDiscriminator::Sell
+        // } else if value_str == MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR.as_str() {
+        //     MoonshotInstructionDiscriminator::TokenMint
+        // } else if value_str == MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR.as_str() {
+        //     MoonshotInstructionDiscriminator::MigrateFunds
+        // } else if value_str == MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR.as_str() {
+        //     MoonshotInstructionDiscriminator::ConfigInit
+        // } else if value_str == MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR.as_str() {
+        //     MoonshotInstructionDiscriminator::ConfigUpdate
+        // } else {
+        //     MoonshotInstructionDiscriminator::Unknown
+        // }
+
+        MoonshotInstructionDiscriminator::Unknown
     }
 }
 
@@ -340,6 +408,8 @@ pub struct MoonshotTradeValues {
 fn decode_instruction_data(instruction_data: &[u8]) -> MoonshotInstructionData {
     // el primer u64 es el discriminador
     //let instruction_type = u64_bytes_to_big_int(instruction_data, 0);
+
+    println!("instruction_data: {:?}", &instruction_data[0..8]);
 
     let instruction_type = BigUint::from_bytes_le(&instruction_data[0..8]);
 
