@@ -1,14 +1,20 @@
 use sha256::digest;
-use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     Event, FunctionCallEvent, FunctionCallEventMeta, FunctionCallInstructionData, GenericEventType,
     IndexerEventSource,
 };
 use num_bigint::BigUint;
+use num_traits::Num;
 use serde_json::Value;
 use solana_sdk::bs58;
+
+mod instruction;
+use instruction::process_token_mint_instruction;
+use instruction::process_trade_instruction;
+
 pub struct MoonshotParser;
 
 pub struct MoonshotTradeFunctionCallEventMeta {
@@ -67,100 +73,28 @@ impl MoonshotParser {
 
         match decoded_instruction {
             MoonshotInstructionData::Trade(_trade) => {
-                let curve_account_index = get_address_index(2, instruction);
-                let curve_token_account_index = get_address_index(3, instruction);
-
-                let meta = transaction_obj.get("meta").unwrap().as_object().unwrap();
-
-                let curve_token_account_token_balances =
-                    get_token_balances(meta, curve_token_account_index);
-
-                let pb = curve_token_account_token_balances.post_balances[0]
-                    .as_object()
-                    .unwrap();
-                let uita = pb.get("uiTokenAmount").unwrap().as_object().unwrap();
-                let amount = uita.get("amount").unwrap().as_str().unwrap();
-                let curve_token_account_token_post_balance =
-                    BigUint::from(amount.parse::<u64>().unwrap());
-
-                println!(
-                    "curve_token_account_token_post_balance: {}",
-                    curve_token_account_token_post_balance
+                let function_call_event = process_trade_instruction(
+                    transaction_obj,
+                    instruction,
+                    addresses,
+                    block_time,
+                    decoded_instruction.clone(),
                 );
-
-                let curve_account_sol_balances = get_sol_balances(meta, curve_account_index);
-
-                let amount = curve_account_sol_balances.post_balances[0]
-                    .as_u64()
-                    .unwrap();
-                let curve_account_sol_post_balance = BigUint::from(amount);
-
-                let transaction = transaction_obj.get("transaction").unwrap();
-
-                let signatures = transaction.get("signatures").unwrap().as_array().unwrap();
-                let signature = signatures.get(0).unwrap().as_str().unwrap();
-
-                let failed_transaction = !meta.get("err").unwrap().is_null();
-
-                let function_call_event = Event::FunctionCall(FunctionCallEvent {
-                    source: IndexerEventSource::Moonshot,
-                    event_type: GenericEventType::Trade,
-                    slot: block_time,
-                    signature: signature.to_string(),
-                    event_obj: Box::new(decoded_instruction.clone()),
-                    event_meta: Box::new(MoonshotTradeFunctionCallEventMeta {
-                        block_time,
-                        sender: get_address_as_string(0, addresses, instruction),
-                        // senderTokenAccount
-                        // curveAccount
-                        // curveTokenAccount
-                        // dexFee
-                        // helioFee
-                        mint: get_address_as_string(6, addresses, instruction),
-                        // configAccount
-                        // tokenProgram
-                        // associatedTokenProgram
-                        // systemProgram
-                        failed_transaction,
-                        // post-balances
-                        bonding_curve_token_post_balance: curve_token_account_token_post_balance,
-                        bonding_curve_sol_post_balance: curve_account_sol_post_balance,
-                    }),
-                });
                 events.push(function_call_event);
             }
             MoonshotInstructionData::TokenMint(_token_mint) => {
-                let meta = transaction_obj.get("meta").unwrap().as_object().unwrap();
-                let failed_transaction = !meta.get("err").unwrap().is_null();
-                if failed_transaction {
-                    return events;
-                }
-
-                let transaction = transaction_obj.get("transaction").unwrap();
-                let signatures = transaction.get("signatures").unwrap().as_array().unwrap();
-                let signature = signatures.get(0).unwrap().as_str().unwrap();
-
-                let function_call_event = Event::FunctionCall(FunctionCallEvent {
-                    source: IndexerEventSource::Moonshot,
-                    event_type: GenericEventType::TokenMint,
-                    slot: block_time,
-                    signature: signature.to_string(),
-                    event_obj: Box::new(decoded_instruction_clone),
-                    event_meta: Box::new(MoonshotTokenMintFunctionCallEventMeta {
-                        block_time,
-                        sender: get_address_as_string(0, addresses, instruction),
-                        mint: get_address_as_string(6, addresses, instruction),
-                        failed_transaction,
-                    }),
-                });
+                let function_call_event = process_token_mint_instruction(
+                    transaction_obj,
+                    instruction,
+                    addresses,
+                    block_time,
+                    decoded_instruction_clone,
+                );
                 events.push(function_call_event);
             }
-            MoonshotInstructionData::MigrateFunds(_migrate_funds) => {
-            }
-            MoonshotInstructionData::ConfigInit(_config_init) => {
-            }
-            MoonshotInstructionData::ConfigUpdate(_config_update) => {
-            }
+            MoonshotInstructionData::MigrateFunds(_migrate_funds) => {}
+            MoonshotInstructionData::ConfigInit(_config_init) => {}
+            MoonshotInstructionData::ConfigUpdate(_config_update) => {}
             MoonshotInstructionData::Unknown => {
                 // TODO: Implement unknown event
             }
@@ -261,106 +195,45 @@ enum MoonshotInstructionDiscriminator {
     Unknown,
 }
 
-static MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
-    LazyLock::new(|| {
-        let digest_result = digest(b"global:buy");
-        // digest_result is a number in text format, convert to a big uint
-        let digest_big_uint = BigUint::from_str(&digest_result).unwrap();
-        println!("digest_big_uint: {}", digest_big_uint);
-        let digest_bytes = digest_big_uint.to_bytes_le();
-        println!("digest_bytes: {:?}", digest_bytes);
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&digest_bytes[0..8]);
-        bytes
-    });
-static MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
-    LazyLock::new(|| {
-        let digest_result = digest(b"global:sell");
-        println!("digest_result: {}", digest_result);
-        let digest_bytes = digest_result.as_bytes();
-        println!("digest_bytes: {:?}", digest_bytes);
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&digest_bytes[0..8]);
-        bytes
-    });
-static MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
-    LazyLock::new(|| {
-        let digest_result = digest(b"global:token_mint");
-        println!("digest_result: {}", digest_result);
-        let digest_bytes = digest_result.as_bytes();
-        println!("digest_bytes: {:?}", digest_bytes);
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&digest_bytes[0..8]);
-        bytes
-    });
-static MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
-    LazyLock::new(|| {
-        let digest_result = digest(b"global:migrate_funds");
-        println!("digest_result: {}", digest_result);
-        let digest_bytes = digest_result.as_bytes();
-        println!("digest_bytes: {:?}", digest_bytes);
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&digest_bytes[0..8]);
-        bytes
-    });
-static MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
-    LazyLock::new(|| {
-        let digest_result = digest(b"global:config_init");
-        println!("digest_result: {}", digest_result);
-        let digest_bytes = digest_result.as_bytes();
-        println!("digest_bytes: {:?}", digest_bytes);
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&digest_bytes[0..8]);
-        bytes
-    });
-static MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR: LazyLock<[u8; 8]> =
-    LazyLock::new(|| {
-        let digest_result = digest(b"global:config_update");
-        println!("digest_result: {}", digest_result);
-        let digest_bytes = digest_result.as_bytes();
-        println!("digest_bytes: {:?}", digest_bytes);
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&digest_bytes[0..8]);
-        bytes
-    });
+fn get_discriminator(discriminator: &str) -> BigUint {
+    let digest_result = digest(discriminator.as_bytes());
+    let digest_big_uint = BigUint::from_str_radix(&digest_result, 16).unwrap();
+    let digest_bytes = digest_big_uint.to_bytes_be();
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest_bytes[0..8]);
+    BigUint::from_bytes_le(&bytes)
+}
+
+static MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR: LazyLock<BigUint> =
+    LazyLock::new(|| get_discriminator("global:buy"));
+static MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR: LazyLock<BigUint> =
+    LazyLock::new(|| get_discriminator("global:sell"));
+static MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR: LazyLock<BigUint> =
+    LazyLock::new(|| get_discriminator("global:token_mint"));
+static MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR: LazyLock<BigUint> =
+    LazyLock::new(|| get_discriminator("global:migrate_funds"));
+static MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR: LazyLock<BigUint> =
+    LazyLock::new(|| get_discriminator("global:config_init"));
+static MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR: LazyLock<BigUint> =
+    LazyLock::new(|| get_discriminator("global:config_update"));
 
 impl MoonshotInstructionDiscriminator {
     fn from_big_uint(value: BigUint) -> Self {
-        let value_str = value.to_string();
-        let value_str = value_str.as_str();
-
-        // let buy_discriminator = MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR.as_str();
-        // let sell_discriminator = MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR.as_str();
-        // let token_mint_discriminator = MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR.as_str();
-        // let migrate_funds_discriminator = MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR.as_str();
-        // let config_init_discriminator = MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR.as_str();
-        // let config_update_discriminator = MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR.as_str();
-
-        println!("value_str: {}", value_str);
-        println!("buy_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR));
-        println!("sell_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR));
-        println!("token_mint_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR));
-        println!("migrate_funds_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR));
-        println!("config_init_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR));
-        println!("config_update_discriminator: {:?}", BigUint::from_bytes_le(&*MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR));
-
-        // if value_str == MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR.as_str() {
-        //     MoonshotInstructionDiscriminator::Buy
-        // } else if value_str == MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR.as_str() {
-        //     MoonshotInstructionDiscriminator::Sell
-        // } else if value_str == MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR.as_str() {
-        //     MoonshotInstructionDiscriminator::TokenMint
-        // } else if value_str == MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR.as_str() {
-        //     MoonshotInstructionDiscriminator::MigrateFunds
-        // } else if value_str == MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR.as_str() {
-        //     MoonshotInstructionDiscriminator::ConfigInit
-        // } else if value_str == MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR.as_str() {
-        //     MoonshotInstructionDiscriminator::ConfigUpdate
-        // } else {
-        //     MoonshotInstructionDiscriminator::Unknown
-        // }
-
-        MoonshotInstructionDiscriminator::Unknown
+        if value == *MOONSHOT_BUY_INSTRUCTION_DISCRIMINATOR {
+            MoonshotInstructionDiscriminator::Buy
+        } else if value == *MOONSHOT_SELL_INSTRUCTION_DISCRIMINATOR {
+            MoonshotInstructionDiscriminator::Sell
+        } else if value == *MOONSHOT_TOKEN_MINT_INSTRUCTION_DISCRIMINATOR {
+            MoonshotInstructionDiscriminator::TokenMint
+        } else if value == *MOONSHOT_MIGRATE_FUNDS_INSTRUCTION_DISCRIMINATOR {
+            MoonshotInstructionDiscriminator::MigrateFunds
+        } else if value == *MOONSHOT_CONFIG_INIT_INSTRUCTION_DISCRIMINATOR {
+            MoonshotInstructionDiscriminator::ConfigInit
+        } else if value == *MOONSHOT_CONFIG_UPDATE_INSTRUCTION_DISCRIMINATOR {
+            MoonshotInstructionDiscriminator::ConfigUpdate
+        } else {
+            MoonshotInstructionDiscriminator::Unknown
+        }
     }
 }
 

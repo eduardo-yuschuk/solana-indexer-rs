@@ -12,11 +12,9 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::time::Instant;
 
+mod blockchain_data;
 mod moonshot;
 use moonshot::MoonshotParser;
-
-mod blockchain_data;
-// use blockchain_data::*;
 
 fn main() {
     // // read tx.json
